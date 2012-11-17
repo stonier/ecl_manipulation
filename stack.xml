@@ -1,0 +1,14 @@
+<stack>
+  <description brief="Manipulation related structures">
+    Includes basic manipulation related structures as well as a few 
+    algorithms currently used at Yujin Robot.
+  </description>
+  <author>Maintained by Daniel Stonier</author>
+  <license>BSD</license>  
+  <review status="experimental" notes=""/>
+  <url>http://ros.org/wiki/ecl_manipulation</url>
+  <depend stack="ecl_core" /> <!-- ecl_formatters, ecl_exceptions, ecl_geometry -->
+  <depend stack="ecl_tools" /> <!-- ecl_build, ecl_license -->
+  <depend stack="ros" />
+
+</stack>

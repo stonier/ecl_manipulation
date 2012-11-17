@@ -1,0 +1,20 @@
+<package>
+  <description brief="Manipulation algorithms/filters.">
+
+  Deploys various manipulation algorithms, currently just 
+  feedforward filters (interpolations). 
+
+  </description>
+  <author>Daniel Stonier (d.stonier@gmail.com)</author>
+  <license>BSD</license>
+  <review status="api cleared" notes=""/>
+  <url>http://snorriheim.dnsdojo.com/redmine/wiki/ecl</url>
+  <export>
+    <cpp cflags="-I${prefix}/include" lflags="-Wl,-rpath,${prefix}/lib -L${prefix}/lib -lecl_manipulators"/>
+  </export>
+  <depend package="ecl_exceptions"/>  
+  <depend package="ecl_formatters"/>  
+  <depend package="ecl_geometry"/>  
+  <depend package="ecl_license"/>
+  <depend package="ecl_build"/>
+</package>

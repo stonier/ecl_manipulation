@@ -499,29 +499,35 @@ Array<SmoothLinearSpline> Trajectory<JointAngles>::generateLinearSplines() throw
 	}
 	std::vector< CartesianPoint2d,Eigen::aligned_allocator<CartesianPoint2d> > pseudo_points(dimension());
 	std::vector<LinearFunction> nominal_rate_lines(dimension());
-	double t_first_duration, t_pullback = 0.0;
-	unsigned int max_pull = 15; // should there be a bound to this?
 	WayPoint<JointAngles> pre_pseudo_waypoint( dimension() );
-	for ( unsigned int i = 1; i <= max_pull; ++i ) {
-		double t = i*waypoints[0].duration()/10;
-		// establish t_first_duration as the minimum time to the intersection of initial tangent and nominal rate line
-		t_first_duration = 1000.0;
+	double t_pullback = 0.001; // start with 1ms
+	double t_pullback_max_ = waypoints[0].duration();
+        double t_pre_intersect_duration = 0.0; // duration from the pulled back wp0 to the intersection point
+	bool acceleration_constraint_broken = true;
+	while (acceleration_constraint_broken && (t_pullback <= t_pullback_max_))
+	{
+                // establish t_pre_intersect_duration as the minimum time to the intersection of initial tangent
+                // and nominal rate line
+                t_pre_intersect_duration = t_pullback_max_/2;
 		for ( unsigned int j = 0; j < dimension(); ++j ) {
-			LinearFunction nominal_rate_line = LinearFunction::PointSlopeForm(t, initial_angles[j], -1 * ecl::psign(initial_rates[j]) * waypoints[0].nominalRates()[j]);
+			LinearFunction nominal_rate_line = LinearFunction::PointSlopeForm(t_pullback, initial_angles[j], -1 * ecl::psign(initial_rates[j]) * waypoints[0].nominalRates()[j]);
 			CartesianPoint2d pseudo_point = LinearFunction::Intersection(initial_tangents[j], nominal_rate_line);
-	    	if ( pseudo_point.x() < t_first_duration ) {
-	    		t_first_duration = pseudo_point.x();
+	    	if ( pseudo_point.x() < t_pre_intersect_duration ) {
+	    	t_pre_intersect_duration = pseudo_point.x();
 	    	}
 	    	nominal_rate_lines[j] = nominal_rate_line;
 		}
-		bool acceleration_constraint_broken = false;
+		acceleration_constraint_broken = false;
 		for ( unsigned int j = 0; j < dimension(); ++j ) {
-	    	CartesianPoint2d pseudo_point(t_first_duration, initial_tangents[j](t_first_duration));
-	    	double pseudo_point_duration = t + waypoints[0].duration() - t_first_duration;
+	    	CartesianPoint2d pseudo_point(t_pre_intersect_duration, initial_tangents[j](t_pre_intersect_duration));
+	        // from the pseudo way point to the next way point (wp1)
+	    	double pseudo_point_duration = t_pullback + waypoints[0].duration() - t_pre_intersect_duration;
+	    	// Will test 5 positions, which cover all of t_pre_intersect_duration
+                // and half of pseudo_point_duration
 	    	for ( unsigned int i = 1; i <= 5; ++i ) {
-	    		double t_l = t_first_duration - i*t_first_duration/5.0;
-	    		double t_r = t_first_duration + i*pseudo_point_duration/10.0;
-				LinearFunction segment = LinearFunction::Interpolation(pseudo_point.x(), pseudo_point.y(), t + waypoints[0].duration(), waypoints[1].angles()[j]);
+	    		double t_l = t_pre_intersect_duration - i*t_pre_intersect_duration/5.0;
+	    		double t_r = t_pre_intersect_duration + i*pseudo_point_duration/10.0;
+				LinearFunction segment = LinearFunction::Interpolation(pseudo_point.x(), pseudo_point.y(), t_pullback + waypoints[0].duration(), waypoints[1].angles()[j]);
 				double y_0 = initial_tangents[j](t_l);
 				double y_0_dot = initial_tangents[j].derivative(t_l);
 				double y = segment(t_r);
@@ -529,75 +535,69 @@ Array<SmoothLinearSpline> Trajectory<JointAngles>::generateLinearSplines() throw
 				QuinticPolynomial quintic = QuinticPolynomial::Interpolation(t_l,y_0,y_0_dot,0.0,t_r,y,y_dot,0.0);
 				if ( ( fabs( CubicPolynomial::Maximum(t_l, t_r, quintic.derivative().derivative())) < fabs(max_accelerations[j]) ) &&
 						( fabs( CubicPolynomial::Minimum(t_l, t_r, quintic.derivative().derivative())) < fabs(max_accelerations[j]) ) ) {
+				        acceleration_constraint_broken = false;
 					break; // we're good, get out and continue through all the joints
 				}
 				if ( i == 5 ) {
 					#ifdef DEBUG_LINEAR_INTERPOLATION
-						std::cout << "Linear Interpolation: pre psuedo point failed with acceleration checks [" << t_first_duration << "][" << t << "]" << std::endl;
+						std::cout << "Linear Interpolation: pre psuedo point failed with acceleration checks [" << t_pre_intersect_duration << "][" << t_pullback << "]" << std::endl;
 					#endif
 					acceleration_constraint_broken = true;
-					break; // failure, get completely out
 				}
-	    	}
-	    	if ( acceleration_constraint_broken ) {
-	    		break; // don't continue through the joints, get out and go back to the pullback loop
-	    	}
+	        }
 		}
-		if ( !acceleration_constraint_broken ) {
-			t_pullback = t; // we have a working solution.
-			break;
-		}
-		if ( i == max_pull ) {
-			throw DataException<int>(LOC,ConstructorError,"Max acceleration bound broken by pre pseudo point.",0);
-		}
+                t_pullback = t_pullback * 2; // takes 11 runs to get from 1ms to 1s; adjust, if this is too much
 	}
-	pre_pseudo_waypoint.duration(t_pullback + waypoints[0].duration() - t_first_duration);
+        if (acceleration_constraint_broken)
+        {
+          throw DataException<int>(LOC,ConstructorError,"Max acceleration bound broken by pre pseudo point.",0);
+        }
+	pre_pseudo_waypoint.duration(t_pullback + waypoints[0].duration() - t_pre_intersect_duration);
 	for ( unsigned int j = 0; j < dimension(); ++j) {
-		pre_pseudo_waypoint.angles()[j] = initial_tangents[j](t_first_duration);
+		pre_pseudo_waypoint.angles()[j] = initial_tangents[j](t_pre_intersect_duration);
 	}
 	#ifdef DEBUG_LINEAR_INTERPOLATION
         std::cout << "Linear Interpolation: pre psuedo point done!" << std::endl;
 		std::cout << "                    : angles " << pre_pseudo_waypoint.angles() << std::endl;
-		std::cout << "                    : pre pseudo duration "    << t_first_duration << std::endl;
+		std::cout << "                    : pre pseudo duration "    << t_pre_intersect_duration << std::endl;
 		std::cout << "                    : modified first waypoint duration " << pre_pseudo_waypoint.duration() << std::endl;
 	#endif
 
 	/******************************************
 	** Make the post pseudo point.
 	*******************************************/
-	// std::vector <LinearFunction> nominal_rate_lines; // reuse from above
-	// std::vector<CartesianPoint2d> pseudo_points(dimension());
 	std::vector <double> final_angles, final_rates;
 	for ( unsigned int j = 0; j < dimension(); ++j ) {
 		final_angles.push_back(waypoints[n].angles()[j]);
 		final_rates.push_back(waypoints[n].rates()[j]);
 		nominal_rate_lines[j] = LinearFunction::PointSlopeForm(0, final_angles[j], -1*ecl::psign(final_rates[j]) * waypoints[n-1].nominalRates()[j]);
 	}
-
 	std::vector<LinearFunction> final_tangents(dimension());
-	double t_final, t_pullforward = 0.0;
-	WayPoint<JointAngles> post_pseudo_waypoint( dimension() );
-	for ( unsigned int i = 1; i <= max_pull; ++i ) {
-		double t = i*waypoints[n-1].duration()/10;
-
+        WayPoint<JointAngles> post_pseudo_waypoint( dimension() );
+        double t_pullforward = 0.001; // start with 1ms
+        double t_pullforward_max_ = waypoints[n-1].duration();
+        double t_post_intersect_duration = 0.0; // duration from the pulled back wp0 to the intersection point
+        acceleration_constraint_broken = true;
+        while (acceleration_constraint_broken && (t_pullforward <= t_pullforward_max_))
+        {
 		// establish t_final as the maximum time to the intersection of final tangent and nominal rate line
-		t_final = 0.0;
+                t_post_intersect_duration = 0.0;
 		for ( unsigned int j = 0; j < dimension(); ++j ) {
-			LinearFunction final_tangent = LinearFunction::PointSlopeForm(t, final_angles[j], final_rates[j]);
+			LinearFunction final_tangent = LinearFunction::PointSlopeForm(t_pullforward, final_angles[j], final_rates[j]);
 	    	final_tangents[j] = final_tangent;
 			CartesianPoint2d pseudo_point = LinearFunction::Intersection(final_tangents[j], nominal_rate_lines[j]);
-	    	if ( pseudo_point.x() > t_final ) {
-	    		t_final = pseudo_point.x();
+	    	if ( pseudo_point.x() > t_post_intersect_duration ) {
+	    	t_post_intersect_duration = pseudo_point.x();
 	    	}
 		}
 		// check acceleration constraints
-		bool acceleration_constraint_broken = false;
+		acceleration_constraint_broken = false;
 		for ( unsigned int j = 0; j < dimension(); ++j ) {
-	    	CartesianPoint2d pseudo_point(t_final, final_tangents[j](t_final));
-	    	double pseudo_point_duration = t - t_final;
+	    	CartesianPoint2d pseudo_point(t_post_intersect_duration, final_tangents[j](t_post_intersect_duration));
+	    	double pseudo_point_duration = t_pullforward - t_post_intersect_duration;
 	    	for ( unsigned int i = 1; i <= 5; ++i ) {
-	    		double t_l = t_final - i*(waypoints[n-1].duration()+t_final)/10.0;
-	    		double t_r = t_final + i*pseudo_point_duration/5.0;
+	    		double t_l = t_post_intersect_duration - i*(waypoints[n-1].duration()+t_post_intersect_duration)/10.0;
+	    		double t_r = t_post_intersect_duration + i*pseudo_point_duration/5.0;
 				LinearFunction segment = LinearFunction::Interpolation(-waypoints[n-1].duration(), waypoints[n-1].angles()[j], pseudo_point.x(), pseudo_point.y());
 				double y_0 = segment(t_l);
 				double y_0_dot = segment.derivative(t_l);
@@ -606,36 +606,31 @@ Array<SmoothLinearSpline> Trajectory<JointAngles>::generateLinearSplines() throw
 				QuinticPolynomial quintic = QuinticPolynomial::Interpolation(t_l,y_0,y_0_dot,0.0,t_r,y,y_dot,0.0);
 				if ( ( fabs( CubicPolynomial::Maximum(t_l, t_r, quintic.derivative().derivative())) < fabs(max_accelerations[j]) ) &&
 						( fabs( CubicPolynomial::Minimum(t_l, t_r, quintic.derivative().derivative())) < fabs(max_accelerations[j]) ) ) {
+				        acceleration_constraint_broken = false;
 					break; // we're good, get out and continue through all the joints
 				}
 				if ( i == 5 ) {
 					#ifdef DEBUG_LINEAR_INTERPOLATION
-						std::cout << "Linear Interpolation: post psuedo point failed with acceleration checks [" << pseudo_point_duration << "][" << t << "]" << std::endl;
+						std::cout << "Linear Interpolation: post psuedo point failed with acceleration checks [" << t_post_intersect_duration << "][" << t_pullforward << "]" << std::endl;
 					#endif
 					acceleration_constraint_broken = true;
-					break; // failure, get completely out
 				}
 	    	}
-	    	if ( acceleration_constraint_broken ) {
-	    		break; // don't continue through the joints, get out and go back to the pullback loop
-	    	}
 		}
-		if ( !acceleration_constraint_broken ) {
-			t_pullforward = t; // we have a working solution.
-			break;
-		}
-		if ( i == max_pull ) {
-			throw DataException<int>(LOC,ConstructorError,"Max acceleration bound broken by post pseudo point.",n+2);
-		}
-	}
-	post_pseudo_waypoint.duration(t_pullforward - t_final);
+		t_pullforward = t_pullforward * 2; // takes 12 runs to get from 1ms to 1s, adjust, if this is too much
+        }
+        if (acceleration_constraint_broken)
+        {
+          throw DataException<int>(LOC,ConstructorError,"Max acceleration bound broken by pre pseudo point.",0);
+        }
+	post_pseudo_waypoint.duration(t_pullforward - t_post_intersect_duration);
 	for ( unsigned int j = 0; j < dimension(); ++j) {
-		post_pseudo_waypoint.angles()[j] = final_tangents[j](t_final);
+		post_pseudo_waypoint.angles()[j] = final_tangents[j](t_post_intersect_duration);
 	}
 	#ifdef DEBUG_LINEAR_INTERPOLATION
 		std::cout << "Linear Interpolation: post psuedo point done!" << std::endl;
 		std::cout << "                    : angles " << post_pseudo_waypoint.angles() << std::endl;
-		std::cout << "                    : modified last point duration "    << waypoints[n-1].duration() + t_final << std::endl;
+		std::cout << "                    : modified last point duration "    << waypoints[n-1].duration() + t_post_intersect_duration << std::endl;
 		std::cout << "                    : post pseudo duration "    << post_pseudo_waypoint.duration() << std::endl;
 	#endif
 
@@ -645,12 +640,12 @@ Array<SmoothLinearSpline> Trajectory<JointAngles>::generateLinearSplines() throw
     // n+3 points (w_0...w_n + pre and post pseudos)
 	// n+3 waypoint_times
 	waypoint_times[0] = 0.0;
-	waypoint_times[1] = t_first_duration;
-	waypoint_times[2] = t_first_duration + pre_pseudo_waypoint.duration();
+	waypoint_times[1] = t_pre_intersect_duration;
+	waypoint_times[2] = t_pre_intersect_duration + pre_pseudo_waypoint.duration();
     for ( unsigned int i = 2; i < n; ++i ) {
         waypoint_times[i+1] = waypoint_times[i]+waypoints[i-1].duration();
     }
-    waypoint_times[n+1] = waypoint_times[n] + waypoints[n-1].duration() + t_final;
+    waypoint_times[n+1] = waypoint_times[n] + waypoints[n-1].duration() + t_post_intersect_duration;
     waypoint_times[n+2] = waypoint_times[n+1] + post_pseudo_waypoint.duration();
 
 	#ifdef DEBUG_LINEAR_INTERPOLATION

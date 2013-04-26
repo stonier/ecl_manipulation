@@ -11,6 +11,7 @@
   <!--<url type="repository">https://github.com/stonier/ecl_manipulation</url>
   <url type="bugtracker">https://github.com/stonier/ecl_manipulation/issues</url> -->
 
+  <buildtool_depend>catkin</buildtool_depend>
   <run_depend>ecl_tools</run_depend>
   <run_depend>ecl_lite</run_depend>
   <run_depend>ecl_core</run_depend>
